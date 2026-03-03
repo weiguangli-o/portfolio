@@ -41,11 +41,11 @@ export const blogItems: BlogItemType[] = [
     title: "Fixing a Silent Notion Sync Failure in Dify",
     excerpt: "How a one-line serialization regression broke Notion sync for all Dify v1.13.0 self-hosted users, and how I traced it through a masking test fixture to deliver a clean fix with regression coverage.",
     image: '/img/dify-notion-sync-bug.svg',
-    url: '/blog/2026-03-01-dify-notion-sync-fix',
+    url: '/blog/dify-notion-sync-fix',
     date: 'March 1, 2026',
     category: 'Open Source',
     tags: ["Dify", "Python", "PostgreSQL", "psycopg2", "Notion", "Open Source"],
-    slug: '2026-03-01-dify-notion-sync-fix',
+    slug: 'dify-notion-sync-fix',
     content: `
 <h1>Fixing a Silent Notion Sync Failure in Dify</h1>
 <p>This post covers my merged contribution to <a href="https://github.com/langgenius/dify" target="_blank" rel="noopener noreferrer">Dify</a>, a popular open-source LLM application platform. The fix addressed a critical regression that silently broke Notion knowledge-base synchronization for all self-hosted v1.13.0 users.</p>
