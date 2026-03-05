@@ -38,6 +38,692 @@ const defaultAuthor: Author = {
 
 export const blogItems: BlogItemType[] = [
   {
+    title: "Fix GPT-2 Attention Scaling Ignored in SDPA/FlashAttention",
+    excerpt: "A silent bug in Hugging Face Transformers caused GPT-2 attention scaling configs to be ignored when using SDPA or FlashAttention backends. Here's how I traced, fixed, and tested it through three rounds of maintainer review.",
+    image: '/img/gpt2-attention-scaling.svg',
+    url: '/blog/transformers-#44397-gpt2-attention-scaling',
+    date: 'March 4, 2026',
+    category: 'Open Source',
+    tags: ["Transformers", "GPT-2", "Attention", "SDPA", "FlashAttention", "Python"],
+    slug: 'transformers-#44397-gpt2-attention-scaling',
+    content: `
+<h1>Fix GPT-2 Attention Scaling Ignored in SDPA/FlashAttention</h1>
+<p>This post covers my merged fix in <a href="https://github.com/huggingface/transformers" target="_blank" rel="noopener noreferrer">Hugging Face Transformers</a> (140K+ stars), addressing a silent correctness bug in GPT-2's attention layer.</p>
+
+<h2>Primary References</h2>
+<ul>
+  <li><strong>Pull Request:</strong> <a href="https://github.com/huggingface/transformers/pull/44397" target="_blank" rel="noopener noreferrer">huggingface/transformers#44397</a></li>
+  <li><strong>Reviewer:</strong> <a href="https://github.com/vasqu" target="_blank" rel="noopener noreferrer">@vasqu</a></li>
+  <li><strong>Files changed:</strong> <a href="https://github.com/huggingface/transformers/pull/44397/files" target="_blank" rel="noopener noreferrer">3 files, +86/-50</a></li>
+</ul>
+
+<h2>Bug Flow Overview</h2>
+<figure>
+  <img src="/img/gpt2-attention-scaling.svg" alt="GPT-2 attention scaling bug — SDPA/FlashAttention paths ignored scaling parameter" class="my-4" />
+  <figcaption>Top: the broken SDPA path silently ignored scaling. Middle: eager path worked correctly. Bottom: the fix passes scaling to all backends.</figcaption>
+</figure>
+
+<h2>The Problem</h2>
+<p><code>GPT2Attention.forward()</code> never passed the <code>scaling</code> parameter to <code>attention_interface()</code>. This meant two GPT-2 configuration options were <strong>silently ignored</strong> when using SDPA or FlashAttention:</p>
+<ul>
+  <li><code>scale_attn_weights</code> — controls whether attention weights are scaled by 1/&radic;d</li>
+  <li><code>scale_attn_by_inverse_layer_idx</code> — scales attention by 1/(layer_idx+1)</li>
+</ul>
+<p>Only the eager attention path applied these correctly, because it checked <code>module.scale_attn_weights</code> internally. SDPA and FlashAttention relied on the <code>scaling</code> parameter — which was never passed.</p>
+
+<h2>Why This Was Hard to Catch</h2>
+<p>This is a <strong>silent correctness bug</strong>: the code runs without errors, but produces subtly wrong outputs. The default scaling (1/&radic;d) is often close enough to not cause obvious failures, making this nearly invisible in standard testing.</p>
+
+<h2>The Fix</h2>
+<p>I refactored the attention scaling to be consistent across all backends:</p>
+
+<pre><code class="language-python"># In __init__: precompute unified scaling factor
+self.scaling = self.head_dim ** -0.5
+if self.scale_attn_by_inverse_layer_idx:
+    self.scaling /= float(layer_idx + 1)
+if not self.scale_attn_weights:
+    self.scaling = 1.0
+
+# In forward: pass to all backends
+attn_output = attention_interface(
+    ...,
+    scaling=self.scaling,  # ← now all backends use correct scaling
+)</code></pre>
+
+<p>I also refactored <code>eager_attention_forward</code> to accept <code>scaling</code> and <code>dropout</code> as parameters (Bert-style), removing the internal module attribute checks.</p>
+
+<h2>Review Process</h2>
+<p>The PR went through <strong>three rounds of review</strong> with maintainer <a href="https://github.com/vasqu" target="_blank" rel="noopener noreferrer">@vasqu</a>:</p>
+<ol>
+  <li>Initial code refactoring approach</li>
+  <li>Tolerance adjustment for regression tests</li>
+  <li>Issue reference and DecisionTransformer sync</li>
+</ol>
+
+<h2>Regression Tests</h2>
+<pre><code class="language-python">def test_sdpa_matches_eager_with_non_default_scaling(self):
+    """SDPA and eager must produce identical outputs with custom scaling."""
+    config = GPT2Config(
+        scale_attn_weights=True,
+        scale_attn_by_inverse_layer_idx=True,
+    )
+    # Compare outputs from eager and SDPA backends
+    # Assert they match within tolerance</code></pre>
+
+<h2>Impact</h2>
+<ul>
+  <li><strong>Project:</strong> Transformers (140K+ GitHub stars), the most widely used ML library</li>
+  <li><strong>Model:</strong> GPT-2 — one of the most deployed models in the ecosystem</li>
+  <li><strong>Bug type:</strong> silent correctness error, harder to detect and more dangerous than crashes</li>
+  <li><strong>Review:</strong> three-round maintainer CR demonstrating production-quality engineering collaboration</li>
+</ul>
+`,
+    author: defaultAuthor,
+    readTime: '10 min read',
+    relatedPosts: ['transformers-#43848-swanlab-resume', 'transformers-#43876-glmmoe-config'],
+  },
+  {
+    title: "Add Missing Function Calling Support for 55 DeepInfra Models in LiteLLM",
+    excerpt: "55 DeepInfra models had tool_choice support but were missing the function_calling flag, causing upstream frameworks to silently skip tool use. A data-layer fix with regression coverage.",
+    image: '/img/blog1.jpg',
+    url: '/blog/litellm-#22620-deepinfra-function-calling',
+    date: 'March 4, 2026',
+    category: 'Open Source',
+    tags: ["LiteLLM", "DeepInfra", "Function Calling", "Python", "Open Source"],
+    slug: 'litellm-#22620-deepinfra-function-calling',
+    content: `
+<h1>Add Missing Function Calling Support for 55 DeepInfra Models in LiteLLM</h1>
+<p>This post covers my merged fix in <a href="https://github.com/BerriAI/litellm" target="_blank" rel="noopener noreferrer">LiteLLM</a>, the universal LLM API proxy layer used by thousands of AI applications.</p>
+
+<h2>Primary References</h2>
+<ul>
+  <li><strong>Pull Request:</strong> <a href="https://github.com/BerriAI/litellm/pull/22620" target="_blank" rel="noopener noreferrer">BerriAI/litellm#22620</a></li>
+  <li><strong>Files changed:</strong> <a href="https://github.com/BerriAI/litellm/pull/22620/files" target="_blank" rel="noopener noreferrer">2 files, +124/-55</a></li>
+</ul>
+
+<h2>The Problem</h2>
+<p>55 DeepInfra models in LiteLLM's model registry had <code>supports_tool_choice: true</code> and included <code>"tools"</code> in their <code>supported_openai_params</code>, but were missing the <code>supports_function_calling: true</code> flag.</p>
+<p>This caused <code>litellm.supports_function_calling()</code> to return <code>False</code>, and upstream frameworks like <strong>instructor</strong> and <strong>langchain</strong> would silently skip tool calling for these models entirely.</p>
+
+<pre><code class="language-python"># Before fix: incorrectly returns False
+litellm.supports_function_calling("deepinfra/meta-llama/Llama-3.3-70B-Instruct-Turbo")
+# → False (should be True)</code></pre>
+
+<h2>Root Cause</h2>
+<p>The <code>supports_function_calling()</code> function checks a dedicated boolean flag in the model metadata. When this flag is <code>None</code> (not set), it defaults to <code>False</code> — even if the model clearly supports tools via other metadata fields.</p>
+
+<h2>The Fix</h2>
+<p>Added <code>"supports_function_calling": true</code> to all 55 affected DeepInfra model entries in <code>model_prices_and_context_window.json</code>, plus a regression test.</p>
+
+<pre><code class="language-python">def test_supports_function_calling_deepinfra_llama():
+    assert litellm.supports_function_calling(
+        model="deepinfra/meta-llama/Llama-3.3-70B-Instruct-Turbo"
+    ) is True</code></pre>
+
+<h2>Impact</h2>
+<ul>
+  <li><strong>55 models</strong> fixed in one patch — broad impact, minimal risk</li>
+  <li><strong>All LiteLLM users</strong> calling DeepInfra models now get correct function calling capability detection</li>
+  <li>Upstream frameworks (instructor, langchain) will automatically start using tool calling for these models</li>
+</ul>
+`,
+    author: defaultAuthor,
+    readTime: '6 min read',
+    relatedPosts: ['pydantic-ai-#4504-pickle-exceptions'],
+  },
+  {
+    title: "Fix Pickle Serialization for All Exception Classes in PydanticAI",
+    excerpt: "PydanticAI's custom exceptions lost attributes during pickle round-trips, breaking error propagation in Celery, Ray, and multiprocessing. Fixed with __reduce__ methods and 16 parameterized tests.",
+    image: '/img/pydantic-ai-pickle.svg',
+    url: '/blog/pydantic-ai-#4504-pickle-exceptions',
+    date: 'March 3, 2026',
+    category: 'Open Source',
+    tags: ["PydanticAI", "Python", "Pickle", "Serialization", "Distributed Systems"],
+    slug: 'pydantic-ai-#4504-pickle-exceptions',
+    content: `
+<h1>Fix Pickle Serialization for All Exception Classes in PydanticAI</h1>
+<p>This post covers my merged fix in <a href="https://github.com/pydantic/pydantic-ai" target="_blank" rel="noopener noreferrer">PydanticAI</a>, the official AI agent framework from the Pydantic team.</p>
+
+<h2>Primary References</h2>
+<ul>
+  <li><strong>Pull Request:</strong> <a href="https://github.com/pydantic/pydantic-ai/pull/4504" target="_blank" rel="noopener noreferrer">pydantic/pydantic-ai#4504</a></li>
+  <li><strong>Files changed:</strong> <a href="https://github.com/pydantic/pydantic-ai/pull/4504/files" target="_blank" rel="noopener noreferrer">2 files, +91/-0</a></li>
+</ul>
+
+<h2>Pickle Round-Trip Overview</h2>
+<figure>
+  <img src="/img/pydantic-ai-pickle.svg" alt="Exception pickle round-trip — attributes lost without __reduce__, preserved with it" class="my-4" />
+  <figcaption>Top: without __reduce__, custom attributes are lost after pickle. Bottom: __reduce__ preserves all fields through the round-trip.</figcaption>
+</figure>
+
+<h2>The Problem</h2>
+<p>PydanticAI's custom exception classes (<code>CallDeferred</code>, <code>ApprovalRequired</code>, <code>UnexpectedModelBehavior</code>, <code>ModelAPIError</code>, <code>ModelHTTPError</code>) stored attributes in custom <code>__init__</code> parameters that were <strong>not passed to <code>super().__init__()</code></strong>.</p>
+<p>This meant <code>pickle.dumps()</code> → <code>pickle.loads()</code> would reconstruct the exception but lose all custom attributes like <code>status_code</code>, <code>model_name</code>, <code>metadata</code>, etc.</p>
+<p>In distributed environments (Celery, Ray, multiprocessing), this caused error handlers to receive empty or broken exception objects.</p>
+
+<h2>The Fix</h2>
+<p>Added <code>__reduce__</code> methods to all 5 exception classes:</p>
+
+<pre><code class="language-python">class ModelHTTPError(ModelAPIError):
+    def __reduce__(self):
+        return (
+            self.__class__,
+            (self.status_code, self.model_name, self.body),
+        )</code></pre>
+
+<h2>Test Coverage</h2>
+<p>Added 16 parameterized tests covering every exception class and its variants:</p>
+
+<pre><code class="language-python">@pytest.mark.parametrize("exc", [
+    ModelHTTPError(429, "gpt-4", "rate limited"),
+    ModelHTTPError(500, "gpt-4", None),
+    ModelAPIError("gpt-4", "connection failed"),
+    CallDeferred(metadata={"key": "value"}),
+    ApprovalRequired(metadata=None),
+    UnexpectedModelBehavior("bad response", body="raw"),
+])
+def test_pickle_round_trip(exc):
+    restored = pickle.loads(pickle.dumps(exc))
+    assert type(restored) is type(exc)
+    # assert all custom attributes match</code></pre>
+
+<h2>Impact</h2>
+<ul>
+  <li><strong>5 exception classes</strong> fixed, covering all PydanticAI custom exceptions</li>
+  <li>Enables reliable error propagation in <strong>Celery, Ray, multiprocessing</strong> workflows</li>
+  <li>PydanticAI is Pydantic's official AI framework — large and growing user base</li>
+  <li>Framework-level infrastructure fix with zero breaking changes</li>
+</ul>
+`,
+    author: defaultAuthor,
+    readTime: '8 min read',
+    relatedPosts: ['litellm-#22620-deepinfra-function-calling', 'openai-agents-#2443-pydantic-warning'],
+  },
+  {
+    title: "Fix BrowserState Pydantic Model Serialization in Gradio",
+    excerpt: "Gradio's BrowserState component converted Pydantic models to Python repr strings instead of JSON dicts, breaking the frontend data contract. Fixed with model_dump() and 8 regression tests.",
+    image: '/img/blog2.jpg',
+    url: '/blog/gradio-#12954-browserstate-serialization',
+    date: 'March 3, 2026',
+    category: 'Open Source',
+    tags: ["Gradio", "Pydantic", "Serialization", "Python", "Open Source"],
+    slug: 'gradio-#12954-browserstate-serialization',
+    content: `
+<h1>Fix BrowserState Pydantic Model Serialization in Gradio</h1>
+<p>This post covers my second merged contribution to <a href="https://github.com/gradio-app/gradio" target="_blank" rel="noopener noreferrer">Gradio</a> (36K+ stars), the most popular ML demo framework.</p>
+
+<h2>Primary References</h2>
+<ul>
+  <li><strong>Pull Request:</strong> <a href="https://github.com/gradio-app/gradio/pull/12954" target="_blank" rel="noopener noreferrer">gradio-app/gradio#12954</a></li>
+  <li><strong>Files changed:</strong> <a href="https://github.com/gradio-app/gradio/pull/12954/files" target="_blank" rel="noopener noreferrer">3 files, +98/-3</a></li>
+</ul>
+
+<h2>The Problem</h2>
+<p><code>gr.BrowserState</code> stored Pydantic <code>BaseModel</code> instances as their <code>str()</code> representation (e.g., <code>name='Dan' age=20</code>) instead of a proper JSON dict. This happened because <code>orjson</code> can't natively serialize Pydantic models, so it fell back to <code>str(content)</code>.</p>
+
+<pre><code class="language-python"># What the frontend received:
+"name='Dan' age=20"  # ← Python repr string, useless
+
+# What it should receive:
+{"name": "Dan", "age": 20}  # ← valid JSON dict</code></pre>
+
+<h2>The Fix</h2>
+<p>Added a <code>_to_json_serializable()</code> helper that converts Pydantic models via <code>model_dump()</code>:</p>
+
+<pre><code class="language-python">def _to_json_serializable(value):
+    if isinstance(value, BaseModel):
+        return value.model_dump()
+    return value</code></pre>
+
+<p>Applied in both <code>__init__</code> (initial state) and <code>postprocess</code> (state updates).</p>
+
+<h2>Test Coverage</h2>
+<p>Added 8 test cases covering Pydantic models, nested models, primitive types, and edge cases.</p>
+
+<h2>Impact</h2>
+<ul>
+  <li>Fixes a data contract violation between Gradio backend and frontend</li>
+  <li>Second merged PR in Gradio (after <a href="https://github.com/gradio-app/gradio/pull/12950" target="_blank" rel="noopener noreferrer">#12950</a>), establishing contributor trust</li>
+  <li>Enables correct BrowserState usage with Pydantic models — a common pattern in typed Python apps</li>
+</ul>
+`,
+    author: defaultAuthor,
+    readTime: '6 min read',
+    relatedPosts: ['gradio-#12950-debug-flag', 'pydantic-ai-#4504-pickle-exceptions'],
+  },
+  {
+    title: "Fix Debug Flag Not Forwarded from launch() in Gradio",
+    excerpt: "Gradio's App.create_app() hardcoded debug=True, ignoring the user's launch(debug=False) setting. A clean one-line fix with tests.",
+    image: '/img/blog3.jpg',
+    url: '/blog/gradio-#12950-debug-flag',
+    date: 'March 2, 2026',
+    category: 'Open Source',
+    tags: ["Gradio", "FastAPI", "Python", "Open Source"],
+    slug: 'gradio-#12950-debug-flag',
+    content: `
+<h1>Fix Debug Flag Not Forwarded from launch() in Gradio</h1>
+<p>My first merged contribution to <a href="https://github.com/gradio-app/gradio" target="_blank" rel="noopener noreferrer">Gradio</a> (36K+ stars).</p>
+
+<h2>Primary References</h2>
+<ul>
+  <li><strong>Pull Request:</strong> <a href="https://github.com/gradio-app/gradio/pull/12950" target="_blank" rel="noopener noreferrer">gradio-app/gradio#12950</a></li>
+  <li><strong>Issue:</strong> <a href="https://github.com/gradio-app/gradio/issues/12946" target="_blank" rel="noopener noreferrer">gradio-app/gradio#12946</a></li>
+  <li><strong>Files changed:</strong> <a href="https://github.com/gradio-app/gradio/pull/12950/files" target="_blank" rel="noopener noreferrer">4 files, +16/-1</a></li>
+</ul>
+
+<h2>The Problem</h2>
+<p><code>App.create_app()</code> hardcoded <code>debug=True</code> when creating the FastAPI application, so <code>demo.launch(debug=False)</code> had no effect — the app was always in debug mode.</p>
+
+<pre><code class="language-python"># routes.py — BEFORE
+def create_app(self, ...):
+    app = FastAPI(..., debug=True)  # ← hardcoded!</code></pre>
+
+<h2>The Fix</h2>
+<pre><code class="language-python"># routes.py — AFTER
+def create_app(self, ..., debug: bool = False):
+    app = FastAPI(..., debug=debug)  # ← forwarded
+
+# blocks.py — wire through from launch()
+self.app = App.create_app(..., debug=debug)</code></pre>
+
+<h2>Tests</h2>
+<pre><code class="language-python">def test_create_app_debug_default_is_false(self):
+    app = App.create_app(...)
+    assert app.debug is False
+
+def test_create_app_debug_flag_forwarded(self):
+    app = App.create_app(..., debug=True)
+    assert app.debug is True</code></pre>
+
+<h2>Impact</h2>
+<ul>
+  <li>Users can now correctly disable debug mode in production deployments</li>
+  <li>Simple but important security/behavior fix — debug mode exposes stack traces</li>
+</ul>
+`,
+    author: defaultAuthor,
+    readTime: '4 min read',
+    relatedPosts: ['gradio-#12954-browserstate-serialization'],
+  },
+  {
+    title: "Assert Runner Emits Error Output on MCP Failures in OpenAI Agents SDK",
+    excerpt: "Added runner-level regression tests to verify MCP tool failures produce proper tool_call_output_item events in both sync and streaming paths.",
+    image: '/img/blog4.jpg',
+    url: '/blog/openai-agents-#2556-mcp-failure-test',
+    date: 'February 28, 2026',
+    category: 'Open Source',
+    tags: ["OpenAI", "Agents SDK", "MCP", "Testing", "Python"],
+    slug: 'openai-agents-#2556-mcp-failure-test',
+    content: `
+<h1>Assert Runner Emits Error Output on MCP Failures in OpenAI Agents SDK</h1>
+<p>This post covers a test-quality contribution to <a href="https://github.com/openai/openai-agents-python" target="_blank" rel="noopener noreferrer">OpenAI's Agents SDK</a>, strengthening the MCP error handling contract.</p>
+
+<h2>Primary References</h2>
+<ul>
+  <li><strong>Pull Request:</strong> <a href="https://github.com/openai/openai-agents-python/pull/2556" target="_blank" rel="noopener noreferrer">openai/openai-agents-python#2556</a></li>
+  <li><strong>Reviewer:</strong> <a href="https://github.com/seratch" target="_blank" rel="noopener noreferrer">@seratch</a></li>
+  <li><strong>Files changed:</strong> <a href="https://github.com/openai/openai-agents-python/pull/2556/files" target="_blank" rel="noopener noreferrer">1 file, +66/-1</a></li>
+</ul>
+
+<h2>The Gap</h2>
+<p>Existing MCP tests verified that the runner <em>continued</em> after tool failures, but didn't explicitly assert that the error was emitted as a <code>tool_call_output_item</code>. This meant a future refactor could silently break error propagation without failing any test.</p>
+
+<h2>What I Added</h2>
+<p>Created <code>CrashingFakeMCPServer</code> that throws on <code>call_tool</code>, then verified both sync and streaming runner paths:</p>
+
+<pre><code class="language-python">class CrashingFakeMCPServer(FakeMCPServer):
+    async def call_tool(self, name, args):
+        raise Exception("MCP tool crashed")
+
+# Assert: error produces a tool_call_output_item
+assert any(
+    isinstance(item, ToolCallOutputItem) for item in result.raw_responses
+)
+# Assert: output matches default_tool_error_function
+assert "MCP tool crashed" in output_item.output
+# Assert: run continues to completion
+assert result.final_output == "done"</code></pre>
+
+<h2>Impact</h2>
+<ul>
+  <li>Locks the "error → tool_call_output_item" behavioral contract for the official OpenAI Agents SDK</li>
+  <li>Covers both sync and streaming execution paths</li>
+  <li>Prevents future refactors from silently breaking MCP error propagation</li>
+</ul>
+`,
+    author: defaultAuthor,
+    readTime: '5 min read',
+    relatedPosts: ['openai-agents-#2463-runconfig-inheritance', 'openai-agents-#2443-pydantic-warning'],
+  },
+  {
+    title: "Fix RunConfig Inheritance for Agent-as-Tool in OpenAI Agents SDK",
+    excerpt: "When an agent was invoked as a tool, it silently lost the parent's RunConfig — breaking tracing, model_provider, and privacy settings in nested agent chains. Fixed with ToolContext propagation.",
+    image: '/img/openai-agents-runconfig.svg',
+    url: '/blog/openai-agents-#2463-runconfig-inheritance',
+    date: 'February 11, 2026',
+    category: 'Open Source',
+    tags: ["OpenAI", "Agents SDK", "RunConfig", "Python", "Open Source"],
+    slug: 'openai-agents-#2463-runconfig-inheritance',
+    content: `
+<h1>Fix RunConfig Inheritance for Agent-as-Tool in OpenAI Agents SDK</h1>
+<p>This post covers a core runtime fix in <a href="https://github.com/openai/openai-agents-python" target="_blank" rel="noopener noreferrer">OpenAI's Agents SDK</a>, the official Python framework for building agent applications.</p>
+
+<h2>Primary References</h2>
+<ul>
+  <li><strong>Pull Request:</strong> <a href="https://github.com/openai/openai-agents-python/pull/2463" target="_blank" rel="noopener noreferrer">openai/openai-agents-python#2463</a></li>
+  <li><strong>Reviewer:</strong> <a href="https://github.com/seratch" target="_blank" rel="noopener noreferrer">@seratch</a></li>
+  <li><strong>Files changed:</strong> <a href="https://github.com/openai/openai-agents-python/pull/2463/files" target="_blank" rel="noopener noreferrer">6 files, +259/-2</a></li>
+</ul>
+
+<h2>Architecture Overview</h2>
+<figure>
+  <img src="/img/openai-agents-runconfig.svg" alt="RunConfig inheritance — broken vs fixed flow through ToolContext" class="my-4" />
+  <figcaption>Top: before the fix, child agents lost RunConfig. Bottom: RunConfig now propagates through ToolContext.</figcaption>
+</figure>
+
+<h2>The Problem</h2>
+<p>In the "agent-as-tool" pattern, a parent agent invokes a child agent as a tool. The child agent should inherit the parent's <code>RunConfig</code> (tracing settings, model_provider, privacy configs). But <code>ToolContext</code> had no <code>run_config</code> field, so the child always used default settings.</p>
+
+<h2>Key Changes</h2>
+<ol>
+  <li><strong>ToolContext</strong>: added <code>run_config: RunConfig | None</code> field</li>
+  <li><strong>tool_execution.py</strong>: passes active <code>run_config</code> into ToolContext</li>
+  <li><strong>Agent.as_tool()</strong>: inherits parent's RunConfig when none is explicitly provided</li>
+  <li>Made <code>run_config</code> keyword-only per maintainer CR feedback</li>
+</ol>
+
+<pre><code class="language-python"># Agent.as_tool() — inherit parent RunConfig
+async def run_agent_tool(ctx: ToolContext, input: str):
+    config = explicit_config or ctx.run_config  # ← new inheritance
+    return await Runner.run(child_agent, input, run_config=config)</code></pre>
+
+<h2>Test Coverage</h2>
+<p>Added tests across 3 files covering inheritance, override, and propagation scenarios — 259 lines added.</p>
+
+<h2>Impact</h2>
+<ul>
+  <li>Fixes configuration consistency in <strong>multi-agent chains</strong> — the core use case of the Agents SDK</li>
+  <li>Ensures tracing, privacy, and model_provider settings propagate correctly</li>
+  <li>259 additions across 6 files — the largest single contribution to the SDK in this batch</li>
+</ul>
+`,
+    author: defaultAuthor,
+    readTime: '8 min read',
+    relatedPosts: ['openai-agents-#2556-mcp-failure-test', 'openai-agents-#2443-pydantic-warning'],
+  },
+  {
+    title: "Suppress Noisy Pydantic Serialization Warnings in OpenAI Agents SDK",
+    excerpt: "High-frequency pydantic serialization warnings were polluting logs in the Agents SDK core path. Fixed with a targeted model_dump wrapper and fallback strategy.",
+    image: '/img/blog4.jpg',
+    url: '/blog/openai-agents-#2443-pydantic-warning',
+    date: 'February 9, 2026',
+    category: 'Open Source',
+    tags: ["OpenAI", "Agents SDK", "Pydantic", "Python", "Open Source"],
+    slug: 'openai-agents-#2443-pydantic-warning',
+    content: `
+<h1>Suppress Noisy Pydantic Serialization Warnings in OpenAI Agents SDK</h1>
+<p>A core stabilization fix in <a href="https://github.com/openai/openai-agents-python" target="_blank" rel="noopener noreferrer">OpenAI's Agents SDK</a>.</p>
+
+<h2>Primary References</h2>
+<ul>
+  <li><strong>Pull Request:</strong> <a href="https://github.com/openai/openai-agents-python/pull/2443" target="_blank" rel="noopener noreferrer">openai/openai-agents-python#2443</a></li>
+  <li><strong>Reviewer:</strong> <a href="https://github.com/seratch" target="_blank" rel="noopener noreferrer">@seratch</a></li>
+  <li><strong>Files changed:</strong> <a href="https://github.com/openai/openai-agents-python/pull/2443/files" target="_blank" rel="noopener noreferrer">2 files, +56/-7</a></li>
+</ul>
+
+<h2>The Problem</h2>
+<p>During input normalization, <code>model_dump()</code> calls generated pydantic serialization warnings for certain payload structures (like <code>container_file_citation</code>). In high-concurrency agent chains, these warnings flooded logs and degraded signal-to-noise ratio for debugging.</p>
+
+<h2>The Fix</h2>
+<pre><code class="language-python">def _model_dump_without_warnings(item):
+    """Dump model without serialization warnings, with fallback."""
+    try:
+        return item.model_dump(exclude_unset=True, warnings=False)
+    except TypeError:
+        # Older pydantic versions don't support warnings= param
+        return item.model_dump(exclude_unset=True)</code></pre>
+
+<p>Applied to both <code>_coerce_to_dict</code> and <code>fingerprint_input_item</code> in the core items module.</p>
+
+<h2>Impact</h2>
+<ul>
+  <li>Cleans up log noise on the SDK's <strong>hottest code path</strong> (input normalization)</li>
+  <li>Maintains backward compatibility with older pydantic versions via fallback</li>
+  <li>Core path stabilization in the official OpenAI Agents framework</li>
+</ul>
+`,
+    author: defaultAuthor,
+    readTime: '5 min read',
+    relatedPosts: ['openai-agents-#2463-runconfig-inheritance', 'openai-agents-#2556-mcp-failure-test'],
+  },
+  {
+    title: "Keep Conversation Timestamp Unchanged When Marking Read in Dify",
+    excerpt: "A read-only operation (marking conversation as read) was incorrectly updating the conversation's updated_at timestamp, corrupting sort order in the chat list.",
+    image: '/img/blog1.jpg',
+    url: '/blog/dify-#32133-conversation-timestamp',
+    date: 'February 10, 2026',
+    category: 'Open Source',
+    tags: ["Dify", "SQLAlchemy", "Python", "Open Source"],
+    slug: 'dify-#32133-conversation-timestamp',
+    content: `
+<h1>Keep Conversation Timestamp Unchanged When Marking Read in Dify</h1>
+<p>A product-quality fix in <a href="https://github.com/langgenius/dify" target="_blank" rel="noopener noreferrer">Dify</a>, the popular open-source LLM application platform.</p>
+
+<h2>Primary References</h2>
+<ul>
+  <li><strong>Pull Request:</strong> <a href="https://github.com/langgenius/dify/pull/32133" target="_blank" rel="noopener noreferrer">langgenius/dify#32133</a></li>
+  <li><strong>Reviewer:</strong> <a href="https://github.com/crazywoola" target="_blank" rel="noopener noreferrer">@crazywoola</a></li>
+  <li><strong>Files changed:</strong> <a href="https://github.com/langgenius/dify/pull/32133/files" target="_blank" rel="noopener noreferrer">2 files, +40/-1</a></li>
+</ul>
+
+<h2>The Problem</h2>
+<p>When a user viewed a conversation (marking it as "read"), the <code>updated_at</code> timestamp was also modified due to SQLAlchemy's <code>onupdate</code> trigger. This caused the conversation to jump to the top of the chat list — a confusing UX behavior.</p>
+
+<h2>The Fix</h2>
+<p>Explicitly preserve the original <code>updated_at</code> value in the UPDATE statement:</p>
+
+<pre><code class="language-python"># Pin updated_at to its current value during read-only updates
+stmt = (
+    update(Conversation)
+    .where(Conversation.id == conversation_id)
+    .values(
+        read_at=datetime.utcnow(),
+        read_account_id=account_id,
+        updated_at=Conversation.updated_at,  # ← preserve original
+    )
+)</code></pre>
+
+<h2>Impact</h2>
+<ul>
+  <li>Fixes conversation sort order corruption on the <strong>highest-frequency user path</strong> (viewing messages)</li>
+  <li>Demonstrates understanding of SQLAlchemy <code>onupdate</code> semantics and business-data boundary awareness</li>
+</ul>
+`,
+    author: defaultAuthor,
+    readTime: '5 min read',
+    relatedPosts: ['dify-#32117-workflow-tool-descriptions', 'dify-#32114-file-marker'],
+  },
+  {
+    title: "Fill Workflow Tool Output Descriptions from Schema in Dify",
+    excerpt: "Workflow tool output fields showed empty descriptions in the UI even when the schema contained them. Fixed the parameter builder to properly hydrate from output_schema.",
+    image: '/img/blog2.jpg',
+    url: '/blog/dify-#32117-workflow-tool-descriptions',
+    date: 'February 10, 2026',
+    category: 'Open Source',
+    tags: ["Dify", "TypeScript", "Workflow", "Open Source"],
+    slug: 'dify-#32117-workflow-tool-descriptions',
+    content: `
+<h1>Fill Workflow Tool Output Descriptions from Schema in Dify</h1>
+<p>A developer-experience fix in <a href="https://github.com/langgenius/dify" target="_blank" rel="noopener noreferrer">Dify</a>'s workflow tool configuration UI.</p>
+
+<h2>Primary References</h2>
+<ul>
+  <li><strong>Pull Request:</strong> <a href="https://github.com/langgenius/dify/pull/32117" target="_blank" rel="noopener noreferrer">langgenius/dify#32117</a></li>
+  <li><strong>Reviewer:</strong> <a href="https://github.com/crazywoola" target="_blank" rel="noopener noreferrer">@crazywoola</a></li>
+  <li><strong>Files changed:</strong> <a href="https://github.com/langgenius/dify/pull/32117/files" target="_blank" rel="noopener noreferrer">2 files, +118/-5</a></li>
+</ul>
+
+<h2>The Problem</h2>
+<p>When configuring published workflow tools, output field descriptions appeared empty in the Tool Output section, even though <code>tool.output_schema</code> contained the descriptions. The <code>buildWorkflowOutputParameters</code> function returned early without hydrating from the schema.</p>
+
+<h2>The Fix</h2>
+<pre><code class="language-typescript">// When array exists, fill missing fields from schema
+if (parameters.length > 0) {
+  return parameters.map(param => ({
+    ...param,
+    description: param.description || schema[param.name]?.description,
+    type: param.type || schema[param.name]?.type,
+  }));
+}</code></pre>
+
+<p>Added 6 test cases with 100% coverage of the modified function.</p>
+
+<h2>Impact</h2>
+<ul>
+  <li>Improves developer experience when integrating workflow-as-tool in Dify</li>
+  <li>Reduces debugging cost — developers can now see output field semantics directly in the UI</li>
+</ul>
+`,
+    author: defaultAuthor,
+    readTime: '5 min read',
+    relatedPosts: ['dify-#32114-file-marker', 'dify-#32133-conversation-timestamp'],
+  },
+  {
+    title: "Include File Marker for Workflow Tool File Outputs in Dify",
+    excerpt: "Workflow-as-tool file outputs were rejected with 'missing file_marker' errors. Fixed the protocol-level data contract and added 237 lines of test coverage.",
+    image: '/img/blog3.jpg',
+    url: '/blog/dify-#32114-file-marker',
+    date: 'February 10, 2026',
+    category: 'Open Source',
+    tags: ["Dify", "Python", "API", "Protocol", "Open Source"],
+    slug: 'dify-#32114-file-marker',
+    content: `
+<h1>Include File Marker for Workflow Tool File Outputs in Dify</h1>
+<p>A protocol-layer fix in <a href="https://github.com/langgenius/dify" target="_blank" rel="noopener noreferrer">Dify</a>'s tool execution pipeline.</p>
+
+<h2>Primary References</h2>
+<ul>
+  <li><strong>Pull Request:</strong> <a href="https://github.com/langgenius/dify/pull/32114" target="_blank" rel="noopener noreferrer">langgenius/dify#32114</a></li>
+  <li><strong>Reviewer:</strong> <a href="https://github.com/crazywoola" target="_blank" rel="noopener noreferrer">@crazywoola</a></li>
+  <li><strong>Files changed:</strong> <a href="https://github.com/langgenius/dify/pull/32114/files" target="_blank" rel="noopener noreferrer">3 files, +239/-2</a></li>
+</ul>
+
+<h2>The Problem</h2>
+<p>Workflow tools that returned file outputs would fail with:</p>
+<pre><code class="language-text">Invalid FileMessage: missing file_marker</code></pre>
+<p>The <code>create_file_message</code> method constructed <code>ToolInvokeMessage.FileMessage()</code> without providing the required <code>file_marker</code> field.</p>
+
+<h2>The Fix</h2>
+<pre><code class="language-python"># Before — missing required field
+ToolInvokeMessage.FileMessage()
+
+# After — explicit protocol marker
+ToolInvokeMessage.FileMessage(file_marker="file_marker")</code></pre>
+
+<p>Added 237 lines of test coverage for the base tool module, including invoke branches, parameter conversion, and message factories.</p>
+
+<h2>Impact</h2>
+<ul>
+  <li>Fixes a <strong>hard failure</strong> in the workflow-as-tool file output pipeline</li>
+  <li>Protocol-level data contract fix — more critical than UI-layer adjustments</li>
+  <li>239 lines of new test coverage strengthens the tool execution foundation</li>
+</ul>
+`,
+    author: defaultAuthor,
+    readTime: '5 min read',
+    relatedPosts: ['dify-#32117-workflow-tool-descriptions', 'dify-#32133-conversation-timestamp'],
+  },
+  {
+    title: "Fix SwanLab Callback Resume Init Args in Transformers",
+    excerpt: "SwanLab's training callback didn't forward resume-related init parameters, breaking experiment continuity when resuming training runs.",
+    image: '/img/blog6.jpg',
+    url: '/blog/transformers-#43848-swanlab-resume',
+    date: 'February 10, 2026',
+    category: 'Open Source',
+    tags: ["Transformers", "SwanLab", "Training", "Callbacks", "Python"],
+    slug: 'transformers-#43848-swanlab-resume',
+    content: `
+<h1>Fix SwanLab Callback Resume Init Args in Transformers</h1>
+<p>A training infrastructure fix in <a href="https://github.com/huggingface/transformers" target="_blank" rel="noopener noreferrer">Hugging Face Transformers</a>.</p>
+
+<h2>Primary References</h2>
+<ul>
+  <li><strong>Pull Request:</strong> <a href="https://github.com/huggingface/transformers/pull/43848" target="_blank" rel="noopener noreferrer">huggingface/transformers#43848</a></li>
+  <li><strong>Reviewer:</strong> <a href="https://github.com/MekkCyber" target="_blank" rel="noopener noreferrer">@MekkCyber</a></li>
+  <li><strong>Files changed:</strong> <a href="https://github.com/huggingface/transformers/pull/43848/files" target="_blank" rel="noopener noreferrer">1 file, +70/-1</a></li>
+</ul>
+
+<h2>The Problem</h2>
+<p><code>SwanLabCallback.setup()</code> didn't forward two optional environment variables to <code>swanlab.init()</code>:</p>
+<ul>
+  <li><code>SWANLAB_RUN_ID</code> → <code>id</code> parameter</li>
+  <li><code>SWANLAB_RESUME</code> → <code>resume</code> parameter</li>
+</ul>
+<p>This meant training resume scenarios didn't preserve experiment identity and continuity in SwanLab.</p>
+
+<h2>Test Coverage</h2>
+<p>Added <code>SwanLabCallbackTest</code> class with tests for default behavior (no forwarding) and environment-variable-driven forwarding.</p>
+
+<h2>Impact</h2>
+<ul>
+  <li>Directly improves training resume stability for SwanLab users</li>
+  <li>Reduces manual recovery cost when training is interrupted</li>
+  <li>Training infrastructure reliability fix in the most-used ML library</li>
+</ul>
+`,
+    author: defaultAuthor,
+    readTime: '4 min read',
+    relatedPosts: ['transformers-#44397-gpt2-attention-scaling', 'transformers-#43876-glmmoe-config'],
+  },
+  {
+    title: "Fix GlmMoeDsaConfig Default MLP Layer Types in Transformers",
+    excerpt: "Modular conversion was generating incorrect default mlp_layer_types for GlmMoeDsa, causing the model config to diverge from source-of-truth. Fixed by correcting the init chain.",
+    image: '/img/blog6.jpg',
+    url: '/blog/transformers-#43876-glmmoe-config',
+    date: 'February 10, 2026',
+    category: 'Open Source',
+    tags: ["Transformers", "GlmMoeDsa", "Config", "Python", "Open Source"],
+    slug: 'transformers-#43876-glmmoe-config',
+    content: `
+<h1>Fix GlmMoeDsaConfig Default MLP Layer Types in Transformers</h1>
+<p>A code-generation consistency fix in <a href="https://github.com/huggingface/transformers" target="_blank" rel="noopener noreferrer">Hugging Face Transformers</a>.</p>
+
+<h2>Primary References</h2>
+<ul>
+  <li><strong>Pull Request:</strong> <a href="https://github.com/huggingface/transformers/pull/43876" target="_blank" rel="noopener noreferrer">huggingface/transformers#43876</a></li>
+  <li><strong>Reviewer:</strong> <a href="https://github.com/zucchini-nlp" target="_blank" rel="noopener noreferrer">@zucchini-nlp</a></li>
+  <li><strong>Files changed:</strong> <a href="https://github.com/huggingface/transformers/pull/43876/files" target="_blank" rel="noopener noreferrer">3 files, +17/-95</a></li>
+</ul>
+
+<h2>The Problem</h2>
+<p><code>GlmMoeDsaConfig</code> should default the first 3 layers to dense MLP and the rest to sparse. The modular conversion pipeline was inlining the parent class <code>__init__</code>, which overrode the correct default value calculation.</p>
+
+<h2>The Fix</h2>
+<pre><code class="language-python"># Correct default: 3 dense + remaining sparse
+# num_hidden_layers=8 → ["dense","dense","dense","sparse","sparse","sparse","sparse","sparse"]
+
+# Fix: use PreTrainedConfig.__init__ to avoid parent init inlining
+class GlmMoeDsaConfig(PreTrainedConfig):
+    def __init__(self, ..., mlp_layer_types=None, **kwargs):
+        if mlp_layer_types is None:
+            mlp_layer_types = ["dense"] * 3 + ["sparse"] * (num_hidden_layers - 3)
+        self.mlp_layer_types = mlp_layer_types
+        PreTrainedConfig.__init__(self, **kwargs)  # ← avoid inlining</code></pre>
+
+<p>This also removed 95 lines of redundant inlined code, making the module cleaner.</p>
+
+<h2>Impact</h2>
+<ul>
+  <li>Fixes "source → generated code → test" consistency in a large model repository</li>
+  <li>Net -78 lines (cleaned up redundant generated code)</li>
+  <li>Demonstrates understanding of the modular conversion pipeline in Transformers</li>
+</ul>
+`,
+    author: defaultAuthor,
+    readTime: '5 min read',
+    relatedPosts: ['transformers-#44397-gpt2-attention-scaling', 'transformers-#43848-swanlab-resume'],
+  },
+  {
     title: "Fixing a Silent Notion Sync Failure in Dify",
     excerpt: "How a one-line serialization regression broke Notion sync for all Dify v1.13.0 self-hosted users, and how I traced it through a masking test fixture to deliver a clean fix with regression coverage.",
     image: '/img/dify-notion-sync-bug.svg',
