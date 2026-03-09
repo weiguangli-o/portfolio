@@ -30,7 +30,7 @@ const defaultAuthor: Author = {
   "bio": "Java Backend Engineer specializing in Spring Boot, distributed systems, and microservices. Passionate about clean code and continuous learning.",
   "image": "/img/profile-avatar.png",
   "social": {
-    "github": "https://github.com/weiguangli-io",
+    "github": "https://github.com/WeigaungLi",
     "linkedin": "https://linkedin.com/in/",
     "twitter": "https://twitter.com/"
   }
